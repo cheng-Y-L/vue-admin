@@ -5,7 +5,8 @@ import { db } from '@/services/data'
 import { isSupabaseConfigured } from '@/lib/supabase'
 import { fetchAllProfiles, updateProfile, deleteProfile } from '@/services/profile.service'
 import { useAuthStore } from '@/stores/auth'
-import type { User } from '@/types'
+import { roleLabel } from '@/constants/roles'
+import type { User, LawyerCertificationStatus } from '@/types'
 
 const props = defineProps<{ currentUser: User }>()
 const auth = useAuthStore()
@@ -21,12 +22,13 @@ const showAddModal = ref(false)
 const newUsername = ref('')
 const newNickname = ref('')
 const newEmail = ref('')
-const newRole = ref<User['role']>('viewer')
+const newRole = ref<User['role']>('lawyer')
 
 const ALL_POSSIBLE_PERMISSIONS = [
   { id: 'dashboard_view', label: '开通：驾驶舱首页查看' },
   { id: 'data_stats_view', label: '开通：多维统计图分析' },
-  { id: 'order_manage', label: '开通：订单模块写操作' },
+  { id: 'order_manage', label: '开通：收支履约查看/导出' },
+  { id: 'task_manage', label: '开通：任务发布与管理' },
   { id: 'user_manage', label: '开通：用户权限与停启' },
   { id: 'system_logs_view', label: '开通：操作日志审计' },
 ]
@@ -87,15 +89,21 @@ async function handleToggleStatus(userId: string) {
 async function handleRoleChange(userId: string, requestedRole: User['role']) {
   if (props.currentUser.role !== 'admin' || userId === props.currentUser.id) return
   let recommendedPerms = ['dashboard_view', 'data_stats_view']
-  if (requestedRole === 'admin') recommendedPerms = ['dashboard_view', 'user_manage', 'order_manage', 'system_logs_view', 'data_stats_view']
-  else if (requestedRole === 'editor') recommendedPerms = ['dashboard_view', 'order_manage', 'data_stats_view']
+  if (requestedRole === 'admin') recommendedPerms = ['dashboard_view', 'user_manage', 'order_manage', 'task_manage', 'system_logs_view', 'data_stats_view']
+  else if (requestedRole === 'publisher') recommendedPerms = ['dashboard_view', 'order_manage', 'task_manage', 'data_stats_view']
 
   const target = users.value.find((u) => u.id === userId)
   if (!target) return
   db.addLog(props.currentUser.username, '管理员', `变更用户角色: ${target.username}`, 'Permissions', 'success')
 
+  const certificationStatus: LawyerCertificationStatus = requestedRole === 'lawyer' ? 'none' : 'approved'
+
   if (isSupabaseConfigured()) {
-    const { ok, error } = await updateProfile(userId, { role: requestedRole, permissions: recommendedPerms })
+    const { ok, error } = await updateProfile(userId, {
+      role: requestedRole,
+      permissions: recommendedPerms,
+      certificationStatus,
+    })
     if (!ok) {
       alert(error ?? '更新失败')
       return
@@ -103,7 +111,7 @@ async function handleRoleChange(userId: string, requestedRole: User['role']) {
     await loadUsers()
   } else {
     const updated = users.value.map((u) =>
-      u.id === userId ? { ...u, role: requestedRole, permissions: recommendedPerms } : u,
+      u.id === userId ? { ...u, role: requestedRole, permissions: recommendedPerms, certificationStatus } : u,
     )
     db.saveUsers(updated)
     users.value = updated
@@ -176,9 +184,9 @@ function handleCreateUser(e: Event) {
   }
   const defaultPerms =
     newRole.value === 'admin'
-      ? ['dashboard_view', 'data_stats_view', 'order_manage', 'user_manage', 'system_logs_view']
-      : newRole.value === 'editor'
-        ? ['dashboard_view', 'order_manage', 'data_stats_view']
+      ? ['dashboard_view', 'data_stats_view', 'order_manage', 'task_manage', 'user_manage', 'system_logs_view']
+      : newRole.value === 'publisher'
+        ? ['dashboard_view', 'order_manage', 'task_manage', 'data_stats_view']
         : ['dashboard_view', 'data_stats_view']
 
   const newUser: User = {
@@ -191,6 +199,7 @@ function handleCreateUser(e: Event) {
     status: 'active',
     avatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80',
     createTime: new Date().toISOString().replace('T', ' ').substring(0, 19),
+    certificationStatus: newRole.value === 'lawyer' ? 'none' : 'approved',
   }
   const updated = [...users.value, newUser]
   db.saveUsers(updated)
@@ -200,7 +209,7 @@ function handleCreateUser(e: Event) {
   newUsername.value = ''
   newNickname.value = ''
   newEmail.value = ''
-  newRole.value = 'viewer'
+  newRole.value = 'lawyer'
 }
 </script>
 
@@ -222,8 +231,8 @@ function handleCreateUser(e: Event) {
         <select v-model="roleFilter" class="px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold">
           <option value="all">任意角色</option>
           <option value="admin">超级管理员</option>
-          <option value="editor">运营编辑</option>
-          <option value="viewer">数据分析员</option>
+          <option value="publisher">发布侧</option>
+          <option value="lawyer">律师</option>
         </select>
         <button
           class="px-3.5 py-1.5 bg-slate-900 text-white text-xs font-semibold rounded-lg flex items-center gap-1.5"
@@ -237,6 +246,10 @@ function handleCreateUser(e: Event) {
     <div v-if="currentUser.role !== 'admin'" class="p-4 bg-orange-50 border border-orange-100 rounded-xl flex gap-2.5">
       <ShieldAlert class="w-4.5 h-4.5 text-[#fa8231] shrink-0" />
       <p class="text-[11px] text-orange-700">只读保护模式：非管理员无法修改角色与权限。</p>
+    </div>
+
+    <div v-else class="p-3.5 bg-slate-50 border border-slate-100 rounded-xl text-[11px] text-slate-600">
+      律师资质认证审批请前往侧栏 <b>用户列表</b> 页面处理。
     </div>
 
     <div class="bg-white border border-slate-100 rounded-2xl p-5 shadow-xs overflow-x-auto">
@@ -273,10 +286,10 @@ function handleCreateUser(e: Event) {
                 @change="handleRoleChange(u.id, ($event.target as HTMLSelectElement).value as User['role'])"
               >
                 <option value="admin">超级管理员</option>
-                <option value="editor">运营编辑</option>
-                <option value="viewer">数据分析员</option>
+                <option value="publisher">发布侧</option>
+                <option value="lawyer">律师</option>
               </select>
-              <span v-else class="text-[10px] font-bold">{{ u.role }}</span>
+              <span v-else class="text-[10px] font-bold">{{ roleLabel(u.role) }}</span>
             </td>
             <td class="py-3.5 px-2">
               <button
@@ -330,8 +343,8 @@ function handleCreateUser(e: Event) {
               <input v-model="newNickname" required placeholder="昵称" class="w-full px-3 py-2 border rounded-lg text-xs" />
               <input v-model="newEmail" type="email" required placeholder="邮箱" class="w-full px-3 py-2 border rounded-lg text-xs" />
               <select v-model="newRole" class="w-full px-2 py-2 border rounded-lg text-xs">
-                <option value="viewer">数据分析员</option>
-                <option value="editor">运营编辑</option>
+                <option value="lawyer">律师</option>
+                <option value="publisher">发布侧</option>
                 <option value="admin">超级管理员</option>
               </select>
               <div class="flex gap-2 justify-end pt-4 border-t">

@@ -4,6 +4,7 @@ import { useRouter, useRoute } from 'vue-router'
 import {
   Shield,
   Mail,
+  Phone,
   Lock,
   User as UserIcon,
   ArrowRight,
@@ -15,7 +16,9 @@ import {
   Loader2,
 } from '@lucide/vue'
 import { storeToRefs } from 'pinia'
+import type { UserRole } from '@/types'
 import { useAuthStore } from '@/stores/auth'
+import { parseLoginIdentifier } from '@/utils/account'
 import { resetPassword } from '@/services/auth.service'
 
 const router = useRouter()
@@ -24,12 +27,15 @@ const auth = useAuthStore()
 const { authLoading } = storeToRefs(auth)
 
 const tab = ref<'login' | 'register'>('login')
+const loginUsername = ref('')
+const resetAccount = ref('')
 const email = ref('')
+const phone = ref('')
 const password = ref('')
 const confirmPassword = ref('')
 const username = ref('')
 const nickname = ref('')
-const role = ref<'admin' | 'editor' | 'viewer'>('viewer')
+const role = ref<UserRole>('lawyer')
 const avatar = ref('https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80')
 const errorMsg = ref('')
 const successMsg = ref('')
@@ -58,11 +64,15 @@ async function handleLogin(e: Event) {
   e.preventDefault()
   clearMessages()
 
-  if (!username.value.trim() || !password.value) {
+  if (!loginUsername.value.trim() || !password.value) {
     errorMsg.value = '请输入用户名和密码'
     return
   }
-  const result = await auth.loginWithCredentials(username.value, password.value)
+  if (!parseLoginIdentifier(loginUsername.value)) {
+    errorMsg.value = '用户名至少 3 个字符'
+    return
+  }
+  const result = await auth.loginWithCredentials(loginUsername.value, password.value)
   if (!result.ok) {
     errorMsg.value = result.error
     return
@@ -75,8 +85,12 @@ async function handleRegister(e: Event) {
   e.preventDefault()
   clearMessages()
 
-  if (!username.value.trim() || !nickname.value.trim() || !email.value.trim()) {
-    errorMsg.value = '请填写所有必填信息'
+  if (!username.value.trim() || !nickname.value.trim()) {
+    errorMsg.value = '请填写用户名和昵称'
+    return
+  }
+  if (!email.value.trim() && !phone.value.trim()) {
+    errorMsg.value = '请至少填写手机号或邮箱其中一项'
     return
   }
   if (username.value.length < 3) {
@@ -94,7 +108,8 @@ async function handleRegister(e: Event) {
   }
 
   const result = await auth.register({
-    email: email.value.trim(),
+    email: email.value.trim() || undefined,
+    phone: phone.value.trim() || undefined,
     password: password.value,
     username: username.value.trim(),
     nickname: nickname.value.trim(),
@@ -107,7 +122,9 @@ async function handleRegister(e: Event) {
     return
   }
   if (result.needsEmailConfirmation) {
-    successMsg.value = '注册成功！请查收邮箱验证链接，验证后即可登录。'
+    successMsg.value = email.value.trim()
+      ? '注册成功！请查收邮箱验证链接，验证后即可登录。'
+      : '注册成功！若项目开启了邮箱验证，请使用手机号登录；仅邮箱注册时会收到验证邮件。'
     tab.value = 'login'
     return
   }
@@ -119,12 +136,16 @@ async function handleForgotPassword(e: Event) {
   e.preventDefault()
   clearMessages()
 
-  if (!email.value.trim()) {
-    errorMsg.value = '请输入注册邮箱'
+  if (!resetAccount.value.trim()) {
+    errorMsg.value = '请输入用户名、手机号或邮箱'
+    return
+  }
+  if (!parseLoginIdentifier(resetAccount.value)) {
+    errorMsg.value = '请输入有效的用户名、手机号或邮箱'
     return
   }
 
-  const { error } = await resetPassword(email.value)
+  const { error } = await resetPassword(resetAccount.value)
   if (error) {
     errorMsg.value = error
     return
@@ -147,7 +168,7 @@ async function handleForgotPassword(e: Event) {
         <h1 class="font-space font-bold text-xl text-slate-900 tracking-tight">智能后台管理原型系统</h1>
         <p class="text-slate-500 text-xs mt-1">智慧大脑多维度全息数据驾驶舱 · Vue 3</p>
         <div class="mt-4 p-2 bg-slate-200/50 rounded-lg text-[11px] text-slate-600 border border-slate-200">
-          使用注册时的<strong class="text-slate-900">用户名</strong>与密码登录；也可输入注册邮箱登录。
+          使用注册时的<strong class="text-slate-900">用户名</strong>与密码登录；也可填写手机号或邮箱。
         </div>
       </div>
 
@@ -180,15 +201,17 @@ async function handleForgotPassword(e: Event) {
       <div class="p-6">
         <!-- 找回密码（内嵌，不改变整体布局） -->
         <form v-if="tab === 'login' && showForgot" class="space-y-4" @submit="handleForgotPassword">
-          <p class="text-xs text-slate-500">输入注册邮箱，我们将发送密码重置链接。</p>
+          <p class="text-xs text-slate-500">输入用户名、手机号或邮箱，我们将向对应账号发送密码重置链接（仅邮箱注册可收信）。</p>
           <div>
-            <label class="block text-xs font-medium text-slate-700 mb-1.5">邮箱地址</label>
+            <label class="block text-xs font-medium text-slate-700 mb-1.5">用户名 / 手机号 / 邮箱</label>
             <div class="relative">
-              <Mail class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+              <UserIcon class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
               <input
-                v-model="email"
-                type="email"
-                placeholder="your@system.com"
+                v-model="resetAccount"
+                type="text"
+                inputmode="text"
+                autocomplete="username"
+                placeholder="用户名，或手机号、邮箱"
                 class="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-hidden focus:border-slate-800 focus:bg-white focus:ring-2 focus:ring-slate-900/5 transition-all"
               />
             </div>
@@ -208,14 +231,14 @@ async function handleForgotPassword(e: Event) {
 
         <form v-else-if="tab === 'login'" class="space-y-4" @submit="handleLogin">
           <div>
-            <label class="block text-xs font-medium text-slate-700 mb-1.5">用户名或邮箱</label>
+            <label class="block text-xs font-medium text-slate-700 mb-1.5">用户名</label>
             <div class="relative">
               <UserIcon class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
               <input
-                v-model="username"
+                v-model="loginUsername"
                 type="text"
                 autocomplete="username"
-                placeholder="注册时的用户名，或邮箱"
+                placeholder="注册时的用户名（也可填手机号或邮箱）"
                 class="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-hidden focus:border-slate-800 focus:bg-white focus:ring-2 focus:ring-slate-900/5 transition-all"
               />
             </div>
@@ -277,14 +300,28 @@ async function handleForgotPassword(e: Event) {
             </div>
           </div>
           <div>
-            <label class="block text-xs font-medium text-slate-700 mb-1.5">邮箱地址 *</label>
+            <label class="block text-xs font-medium text-slate-700 mb-1.5">手机号</label>
+            <div class="relative">
+              <Phone class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+              <input
+                v-model="phone"
+                type="tel"
+                inputmode="tel"
+                autocomplete="tel"
+                placeholder="11 位手机号（与邮箱至少填一项）"
+                class="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-hidden focus:border-slate-800 focus:bg-white focus:ring-2 focus:ring-slate-900/5 transition-all"
+              />
+            </div>
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-700 mb-1.5">邮箱地址</label>
             <div class="relative">
               <Mail class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
               <input
                 v-model="email"
                 type="email"
-                placeholder="your@system.com"
-                required
+                autocomplete="email"
+                placeholder="your@system.com（与手机号至少填一项）"
                 class="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-hidden focus:border-slate-800 focus:bg-white focus:ring-2 focus:ring-slate-900/5 transition-all"
               />
             </div>
@@ -322,8 +359,8 @@ async function handleForgotPassword(e: Event) {
               class="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-hidden focus:border-slate-800 focus:bg-white focus:ring-2 focus:ring-slate-900/5 transition-all"
             >
               <option value="admin">超级管理员 (全部页面与数据操作权限)</option>
-              <option value="editor">运营编辑 (可读写订单，查看数据)</option>
-              <option value="viewer">数据分析员 (仅查看数据与驾驶舱)</option>
+              <option value="publisher">发布侧 (可读写订单，查看数据)</option>
+              <option value="lawyer">律师 (仅查看数据与驾驶舱)</option>
             </select>
           </div>
           <div>

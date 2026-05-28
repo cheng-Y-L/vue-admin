@@ -6,12 +6,14 @@ import { PERMISSION_TO_PATH } from '@/router/nav'
 import {
   fetchProfileById,
   fetchSessionUser,
-  signUpWithEmail,
   signOutSupabase,
-  signInLocalDemo,
+  signInWithAccount,
+  signUpWithAccount,
   logAuthSuccess,
   type SignUpParams,
 } from '@/services/auth.service'
+import { roleLabel, roleHasPermission } from '@/constants/roles'
+import { lawyerNeedsVerification } from '@/utils/lawyer-cert'
 import type { User } from '@/types'
 
 export const useAuthStore = defineStore('auth', () => {
@@ -26,7 +28,7 @@ export const useAuthStore = defineStore('auth', () => {
   function hasPermission(permission: string) {
     const user = currentUser.value
     if (!user) return false
-    return user.role === 'admin' || user.permissions.includes(permission)
+    return roleHasPermission(user.role, user.permissions, permission)
   }
 
   function setUser(user: User | null) {
@@ -56,6 +58,12 @@ export const useAuthStore = defineStore('auth', () => {
           if (profile && profile.status === 'active') {
             currentUser.value = profile
             db.setCurrentSession(profile)
+            return
+          }
+          if (profile?.status === 'suspended') {
+            await signOutSupabase()
+            currentUser.value = null
+            db.setCurrentSession(null)
           }
         }, 0)
       })
@@ -79,7 +87,7 @@ export const useAuthStore = defineStore('auth', () => {
   async function loginWithCredentials(identifier: string, password: string) {
     authLoading.value = true
     try {
-      const { user, error } = await signInLocalDemo(identifier, password)
+      const { user, error } = await signInWithAccount(identifier, password)
       if (error || !user) return { ok: false as const, error: error ?? '登录失败' }
       logAuthSuccess(user, isSupabaseConfigured() ? '登录系统成功 (Supabase)' : '登录系统成功')
       setUser(user)
@@ -92,7 +100,7 @@ export const useAuthStore = defineStore('auth', () => {
   async function register(params: SignUpParams) {
     authLoading.value = true
     try {
-      const { user, needsEmailConfirmation, error } = await signUpWithEmail(params)
+      const { user, needsEmailConfirmation, error } = await signUpWithAccount(params)
       if (error) return { ok: false as const, error, needsEmailConfirmation: false }
       if (needsEmailConfirmation) {
         return { ok: true as const, needsEmailConfirmation: true }
@@ -111,7 +119,7 @@ export const useAuthStore = defineStore('auth', () => {
       const u = currentUser.value
       db.addLog(
         u.username,
-        u.role === 'admin' ? '管理员' : u.role === 'editor' ? '编辑' : '分析员',
+        roleLabel(u.role),
         '主动退出登录退出系统',
         'Auth',
         'success',
@@ -145,6 +153,7 @@ export const useAuthStore = defineStore('auth', () => {
   function getDefaultPath() {
     const user = currentUser.value
     if (!user) return '/login'
+    if (lawyerNeedsVerification(user)) return '/lawyer/verify-required'
     if (hasPermission('dashboard_view')) return '/dashboard'
     const firstPath = user.permissions.map((p) => PERMISSION_TO_PATH[p]).find(Boolean)
     return firstPath ?? '/dashboard'
@@ -166,5 +175,6 @@ export const useAuthStore = defineStore('auth', () => {
     logout,
     refreshFromDb,
     getDefaultPath,
+    setUser,
   }
 })

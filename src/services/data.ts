@@ -2,7 +2,9 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  */
-import type { User, Order, SystemLog, StatSummary, DashboardMetric, CategoryRatio } from '../types';
+import type { User, Order, Task, TaskApplication, TaskSubmission, SystemLog, StatSummary, DashboardMetric, CategoryRatio } from '../types';
+import { normalizeRole, effectivePermissions } from '@/constants/roles';
+import { normalizeCertificationStatus } from '@/utils/lawyer-cert';
 import { formatLocalDateTime } from '@/utils/datetime';
 
 // Helper to generate IDs
@@ -133,6 +135,144 @@ const DEFAULT_ORDERS: Order[] = [
   }
 ];
 
+// Default Tasks (publisher demo data)
+const DEFAULT_TASKS: Task[] = [
+  {
+    id: 'task_demo_001',
+    publisherId: 'demo_publisher',
+    title: '劳动合同纠纷咨询与代理',
+    taskType: '劳动争议',
+    region: '上海市',
+    description: '员工被违法解除劳动合同，需律师提供法律咨询并代理仲裁。',
+    budget: 8000,
+    deadline: '2026-06-30T23:59:59.000Z',
+    attachmentUrls: [],
+    status: 'pending',
+    createdAt: '2026-05-26 10:00:00',
+    updatedAt: '2026-05-26 10:00:00',
+  },
+  {
+    id: 'task_demo_002',
+    publisherId: 'demo_publisher',
+    title: '股权转让协议审查',
+    taskType: '合同审查',
+    region: '北京市',
+    description: '拟收购初创公司 30% 股权，需专业律师审查协议条款。',
+    budget: 15000,
+    deadline: '2026-06-15T23:59:59.000Z',
+    attachmentUrls: [],
+    status: 'in_progress',
+    assignedLawyerId: 'demo_lawyer',
+    createdAt: '2026-05-24 14:30:00',
+    updatedAt: '2026-05-25 09:00:00',
+  },
+  {
+    id: 'task_demo_003',
+    publisherId: 'demo_publisher',
+    title: '商标侵权诉讼',
+    taskType: '知识产权',
+    region: '广东省',
+    description: '',
+    budget: null,
+    deadline: null,
+    attachmentUrls: [],
+    status: 'draft',
+    createdAt: '2026-05-27 16:20:00',
+    updatedAt: '2026-05-27 16:20:00',
+  },
+  {
+    id: 'task_demo_004',
+    publisherId: 'demo_publisher',
+    title: '企业法律顾问年度服务',
+    taskType: '法律顾问',
+    region: '浙江省',
+    description: '为中小企业提供全年法律顾问服务，含合同审查与合规咨询。',
+    budget: 50000,
+    deadline: '2026-12-31T23:59:59.000Z',
+    attachmentUrls: [],
+    status: 'awaiting_completion',
+    assignedLawyerId: 'demo_lawyer',
+    createdAt: '2026-05-20 09:00:00',
+    updatedAt: '2026-05-28 16:30:00',
+  },
+  {
+    id: 'task_demo_005',
+    publisherId: 'demo_publisher',
+    title: '商事仲裁代理',
+    taskType: '商事仲裁',
+    region: '江苏省',
+    description: '供应商货款争议，需代理参加仲裁并提交证据材料。',
+    budget: 12000,
+    deadline: '2026-07-01T23:59:59.000Z',
+    attachmentUrls: [],
+    status: 'completed',
+    assignedLawyerId: 'demo_lawyer',
+    createdAt: '2026-05-10 11:00:00',
+    updatedAt: '2026-05-22 14:00:00',
+  },
+  {
+    id: 'task_demo_006',
+    publisherId: 'demo_publisher',
+    title: '离婚财产分割咨询',
+    taskType: '婚姻家庭',
+    region: '四川省',
+    description: '双方对房产分割存在争议，需律师出具方案并代理调解。',
+    budget: 6000,
+    deadline: '2026-06-20T23:59:59.000Z',
+    attachmentUrls: [],
+    status: 'closed',
+    assignedLawyerId: 'demo_lawyer',
+    createdAt: '2026-05-05 08:00:00',
+    updatedAt: '2026-05-15 10:00:00',
+  },
+];
+
+// Default Task Applications (local demo)
+const DEFAULT_TASK_APPLICATIONS: TaskApplication[] = [
+  {
+    id: 'app_demo_001',
+    taskId: 'task_demo_002',
+    lawyerId: 'demo_lawyer',
+    proposal: '具有 8 年并购尽调经验，可在一周内完成协议审查并出具修改意见。',
+    quote: 14500,
+    status: 'accepted',
+    createdAt: '2026-05-24 16:00:00',
+    updatedAt: '2026-05-25 09:00:00',
+  },
+  {
+    id: 'app_demo_002',
+    taskId: 'task_demo_004',
+    lawyerId: 'demo_lawyer',
+    proposal: '可提供驻场+远程结合的顾问服务，含月度合规报告。',
+    quote: 48000,
+    status: 'accepted',
+    createdAt: '2026-05-20 10:00:00',
+    updatedAt: '2026-05-21 09:00:00',
+  },
+  {
+    id: 'app_demo_003',
+    taskId: 'task_demo_005',
+    lawyerId: 'demo_lawyer',
+    proposal: '熟悉本地仲裁规则，曾代理多起货款争议案件。',
+    quote: 11500,
+    status: 'accepted',
+    createdAt: '2026-05-10 12:00:00',
+    updatedAt: '2026-05-11 09:00:00',
+  },
+  {
+    id: 'app_demo_004',
+    taskId: 'task_demo_006',
+    lawyerId: 'demo_lawyer',
+    proposal: '专注婚姻家庭领域，可协助双方达成调解方案。',
+    quote: 5500,
+    status: 'accepted',
+    createdAt: '2026-05-05 09:00:00',
+    updatedAt: '2026-05-06 09:00:00',
+  },
+];
+
+const DEFAULT_TASK_SUBMISSIONS: TaskSubmission[] = [];
+
 // Default System Logs
 const DEFAULT_LOGS: SystemLog[] = [
   {
@@ -149,7 +289,7 @@ const DEFAULT_LOGS: SystemLog[] = [
     id: 'LOG-002',
     operator: 'admin',
     role: '管理员',
-    action: '修改用户权限: user_editor(运营编辑)',
+    action: '修改用户权限: user_publisher(发布侧)',
     ip: '192.168.1.100',
     module: 'Permissions',
     status: 'success',
@@ -157,8 +297,8 @@ const DEFAULT_LOGS: SystemLog[] = [
   },
   {
     id: 'LOG-003',
-    operator: 'editor',
-    role: '运营编辑',
+    operator: 'publisher',
+    role: '发布侧',
     action: '登录系统成功',
     ip: '110.231.84.42',
     module: 'Auth',
@@ -167,8 +307,8 @@ const DEFAULT_LOGS: SystemLog[] = [
   },
   {
     id: 'LOG-004',
-    operator: 'editor',
-    role: '运营编辑',
+    operator: 'publisher',
+    role: '发布侧',
     action: '更新订单状态: ORD-2026052504 -> 运输中',
     ip: '110.231.84.42',
     module: 'OrderManage',
@@ -177,8 +317,8 @@ const DEFAULT_LOGS: SystemLog[] = [
   },
   {
     id: 'LOG-005',
-    operator: 'viewer',
-    role: '数据分析员',
+    operator: 'lawyer',
+    role: '律师',
     action: '尝试越权查看系统日志',
     ip: '202.102.3.99',
     module: 'Auth',
@@ -197,8 +337,8 @@ const DEFAULT_LOGS: SystemLog[] = [
   },
   {
     id: 'LOG-007',
-    operator: 'viewer',
-    role: '数据分析员',
+    operator: 'lawyer',
+    role: '律师',
     action: '登录系统成功',
     ip: '202.102.3.99',
     module: 'Auth',
@@ -271,9 +411,71 @@ export const DEFAULT_SUMMARY: StatSummary = {
 
 // Database Initialization & Management Class for local storage
 class LocalDb {
+  private migrateLegacyRoles() {
+    const rawUsers = localStorage.getItem('admin_users')
+    if (rawUsers) {
+      const users = JSON.parse(rawUsers) as User[]
+      let usersChanged = false
+      const migratedUsers = users.map((u) => {
+        const role = normalizeRole(u.role)
+        const certificationStatus =
+          u.certificationStatus !== undefined
+            ? normalizeCertificationStatus(u.certificationStatus)
+            : role === 'lawyer'
+              ? 'none'
+              : 'approved'
+        const changed = role !== u.role || u.certificationStatus !== certificationStatus
+        const perms = effectivePermissions(role, u.permissions ?? [])
+        const permsChanged =
+          perms.length !== (u.permissions?.length ?? 0) || perms.some((p, i) => p !== u.permissions?.[i])
+        if (!changed && !permsChanged) return u
+        usersChanged = true
+        return { ...u, role, certificationStatus, permissions: perms }
+      })
+      if (usersChanged) localStorage.setItem('admin_users', JSON.stringify(migratedUsers))
+    }
+
+    const session = localStorage.getItem('admin_session')
+    if (session) {
+      try {
+        const user = JSON.parse(session) as User
+        const role = normalizeRole(user.role)
+        const certificationStatus =
+          user.certificationStatus !== undefined
+            ? normalizeCertificationStatus(user.certificationStatus)
+            : role === 'lawyer'
+              ? 'none'
+              : 'approved'
+        const perms = effectivePermissions(role, user.permissions ?? [])
+        const needsUpdate =
+          role !== user.role ||
+          user.certificationStatus !== certificationStatus ||
+          perms.length !== (user.permissions?.length ?? 0) ||
+          perms.some((p, i) => p !== user.permissions?.[i])
+        if (needsUpdate) {
+          localStorage.setItem(
+            'admin_session',
+            JSON.stringify({ ...user, role, certificationStatus, permissions: perms }),
+          )
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
   init() {
     if (!localStorage.getItem('admin_orders')) {
       localStorage.setItem('admin_orders', JSON.stringify(DEFAULT_ORDERS));
+    }
+    if (!localStorage.getItem('admin_tasks')) {
+      localStorage.setItem('admin_tasks', JSON.stringify(DEFAULT_TASKS));
+    }
+    if (!localStorage.getItem('admin_task_applications')) {
+      localStorage.setItem('admin_task_applications', JSON.stringify(DEFAULT_TASK_APPLICATIONS));
+    }
+    if (!localStorage.getItem('admin_task_submissions')) {
+      localStorage.setItem('admin_task_submissions', JSON.stringify(DEFAULT_TASK_SUBMISSIONS));
     }
     if (!localStorage.getItem('admin_logs')) {
       localStorage.setItem('admin_logs', JSON.stringify(DEFAULT_LOGS));
@@ -281,6 +483,7 @@ class LocalDb {
     if (!localStorage.getItem('admin_summary')) {
       localStorage.setItem('admin_summary', JSON.stringify(DEFAULT_SUMMARY));
     }
+    this.migrateLegacyRoles()
   }
 
   getUsers(): User[] {
@@ -299,6 +502,33 @@ class LocalDb {
 
   saveOrders(orders: Order[]) {
     localStorage.setItem('admin_orders', JSON.stringify(orders));
+  }
+
+  getTasks(): Task[] {
+    this.init();
+    return JSON.parse(localStorage.getItem('admin_tasks') || '[]');
+  }
+
+  saveTasks(tasks: Task[]) {
+    localStorage.setItem('admin_tasks', JSON.stringify(tasks));
+  }
+
+  getTaskApplications(): TaskApplication[] {
+    this.init();
+    return JSON.parse(localStorage.getItem('admin_task_applications') || '[]');
+  }
+
+  saveTaskApplications(applications: TaskApplication[]) {
+    localStorage.setItem('admin_task_applications', JSON.stringify(applications));
+  }
+
+  getTaskSubmissions(): TaskSubmission[] {
+    this.init();
+    return JSON.parse(localStorage.getItem('admin_task_submissions') || '[]');
+  }
+
+  saveTaskSubmissions(submissions: TaskSubmission[]) {
+    localStorage.setItem('admin_task_submissions', JSON.stringify(submissions));
   }
 
   getLogs(): SystemLog[] {
@@ -338,12 +568,13 @@ class LocalDb {
 
     try {
       const activeUser = JSON.parse(session) as User;
+      const normalized = { ...activeUser, role: normalizeRole(activeUser.role) };
       // Supabase 用户（UUID）不在本地 mock 列表，直接信任缓存
-      if (activeUser.id.includes('-')) {
-        return activeUser.status === 'active' ? activeUser : null;
+      if (normalized.id.includes('-')) {
+        return normalized.status === 'active' ? normalized : null;
       }
       const users = this.getUsers();
-      const dbUser = users.find((u) => u.id === activeUser.id);
+      const dbUser = users.find((u) => u.id === normalized.id);
       if (dbUser && dbUser.status === 'active') {
         return dbUser;
       }
@@ -355,7 +586,7 @@ class LocalDb {
 
   setCurrentSession(user: User | null) {
     if (user) {
-      localStorage.setItem('admin_session', JSON.stringify(user));
+      localStorage.setItem('admin_session', JSON.stringify({ ...user, role: normalizeRole(user.role) }));
     } else {
       localStorage.removeItem('admin_session');
     }

@@ -1,237 +1,175 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import {
-  ShoppingBag,
+  Wallet,
   Search,
-  Truck,
-  CheckCircle2,
-  XCircle,
   FileSpreadsheet,
-  Plus,
   Lock,
   Copy,
   Check,
+  XCircle,
+  ArrowRight,
+  TrendingUp,
+  TrendingDown,
+  ExternalLink,
 } from '@lucide/vue'
-import { db } from '../services/data'
-import type { Order, User } from '../types'
+import { roleLabel as formatRoleLabel, roleHasPermission } from '@/constants/roles'
+import {
+  SETTLEMENT_STATUS_LABELS,
+  SETTLEMENT_STATUS_CLASS,
+  SETTLEMENT_STATUS_DOT_CLASS,
+  type SettlementStatus,
+} from '@/constants/settlements'
+import { TASK_TYPES } from '@/constants/tasks'
+import { db } from '@/services/data'
+import { fetchSettlementRecords } from '@/services/task-settlement.service'
+import type { TaskSettlementRecord, User } from '@/types'
 
 const props = defineProps<{ currentUser: User }>()
 
-type StatusFilter = 'all' | Order['status']
-type CategoryFilter = 'all' | '数码电子' | '办公家具' | '数码配件' | '影音娱乐' | '家用电器'
+type StatusFilter = 'all' | SettlementStatus
+type DirectionFilter = 'all' | 'income' | 'expense'
 
-const orders = ref<Order[]>([])
+const router = useRouter()
+const records = ref<TaskSettlementRecord[]>([])
+const loading = ref(true)
 const searchQuery = ref('')
 const statusFilter = ref<StatusFilter>('all')
-const categoryFilter = ref<CategoryFilter>('all')
-const showAddForm = ref(false)
-const customer = ref('')
-const email = ref('')
-const productName = ref('')
-const category = ref('数码电子')
-const amount = ref('')
-const paymentMethod = ref<Order['paymentMethod']>('Alipay')
+const typeFilter = ref('all')
+const directionFilter = ref<DirectionFilter>('all')
 const exportedData = ref<string | null>(null)
 const copied = ref(false)
 
-const canManage = computed(() => props.currentUser.permissions.includes('order_manage'))
-
-const roleLabel = computed(() =>
-  props.currentUser.role === 'admin' ? '管理员' : '运营编辑',
+const isAdmin = computed(() => props.currentUser.role === 'admin')
+const isPublisher = computed(() => props.currentUser.role === 'publisher')
+const isLawyer = computed(() => props.currentUser.role === 'lawyer')
+const canManage = computed(() =>
+  roleHasPermission(props.currentUser.role, props.currentUser.permissions, 'order_manage'),
 )
+const currentRoleLabel = computed(() => formatRoleLabel(props.currentUser.role))
 
-onMounted(() => {
-  orders.value = db.getOrders()
+const pageTitle = computed(() => {
+  if (isLawyer.value) return '我的收入与履约'
+  if (isPublisher.value) return '任务支出与履约'
+  return '平台收支履约总览'
 })
 
-const filteredOrders = computed(() => {
+const pageSubtitle = computed(() => {
+  if (isLawyer.value) return '基于已承接任务查看报价、履约进度与结算状态'
+  if (isPublisher.value) return '基于已发布任务跟踪预算锁定、履约进度与结算支出'
+  return '汇总全平台任务委托的资金流转与履约节点'
+})
+
+const directionLabel = computed(() => (isLawyer.value ? '收入' : '支出'))
+
+onMounted(async () => {
+  loading.value = true
+  records.value = await fetchSettlementRecords(props.currentUser.id, props.currentUser.role)
+  loading.value = false
+})
+
+const filteredRecords = computed(() => {
   const query = searchQuery.value.trim().toLowerCase()
-  return orders.value.filter((o) => {
+  return records.value.filter((r) => {
     const matchesSearch =
-      o.id.toLowerCase().includes(query) ||
-      o.customerName.toLowerCase().includes(query) ||
-      o.productName.toLowerCase().includes(query)
-    const matchesStatus = statusFilter.value === 'all' || o.status === statusFilter.value
-    const matchesCategory = categoryFilter.value === 'all' || o.category === categoryFilter.value
-    return matchesSearch && matchesStatus && matchesCategory
+      !query ||
+      r.taskTitle.toLowerCase().includes(query) ||
+      r.taskType.toLowerCase().includes(query) ||
+      r.region.toLowerCase().includes(query) ||
+      r.publisherName.toLowerCase().includes(query) ||
+      (r.lawyerName?.toLowerCase().includes(query) ?? false) ||
+      r.taskId.toLowerCase().includes(query)
+
+    const matchesStatus = statusFilter.value === 'all' || r.settlementStatus === statusFilter.value
+    const matchesType = typeFilter.value === 'all' || r.taskType === typeFilter.value
+    const matchesDirection =
+      directionFilter.value === 'all' || r.direction === directionFilter.value
+
+    return matchesSearch && matchesStatus && matchesType && matchesDirection
   })
 })
 
-const orderStats = computed(() => ({
-  pending: orders.value.filter((o) => o.status === 'pending').length,
-  shipping: orders.value.filter((o) => o.status === 'shipping').length,
-  completed: orders.value.filter((o) => o.status === 'completed').length,
-  canceled: orders.value.filter((o) => o.status === 'canceled').length,
-  filteredAmount: filteredOrders.value.reduce((sum, o) => sum + o.amount, 0),
-}))
-
-function paymentLabel(method: Order['paymentMethod']) {
-  const map: Record<Order['paymentMethod'], string> = {
-    Alipay: '支付宝',
-    WeChatPay: '微信支付',
-    CreditCard: '信用卡',
-    PayPal: 'PayPal',
-  }
-  return map[method]
+function sumAmount(list: TaskSettlementRecord[]) {
+  return list.reduce((sum, r) => sum + (r.agreedAmount ?? 0), 0)
 }
 
-function paymentClass(method: Order['paymentMethod']) {
-  const map: Record<Order['paymentMethod'], string> = {
-    Alipay: 'bg-blue-50 text-blue-700',
-    WeChatPay: 'bg-emerald-50 text-emerald-700',
-    CreditCard: 'bg-amber-50 text-amber-700',
-    PayPal: 'bg-indigo-50 text-indigo-700',
+const stats = computed(() => {
+  const all = records.value
+  const awaiting = all.filter((r) => r.settlementStatus === 'awaiting')
+  const fulfilling = all.filter((r) => r.settlementStatus === 'fulfilling' || r.settlementStatus === 'disputed')
+  const pendingSettlement = all.filter((r) => r.settlementStatus === 'pending_settlement')
+  const settled = all.filter((r) => r.settlementStatus === 'settled')
+
+  return {
+    awaiting: { count: awaiting.length, amount: sumAmount(awaiting) },
+    fulfilling: { count: fulfilling.length, amount: sumAmount(fulfilling) },
+    pendingSettlement: { count: pendingSettlement.length, amount: sumAmount(pendingSettlement) },
+    settled: { count: settled.length, amount: sumAmount(settled) },
+    filteredAmount: sumAmount(filteredRecords.value),
   }
-  return map[method]
+})
+
+function formatAmount(amount: number | null) {
+  if (amount === null) return '面议'
+  return `¥${amount.toLocaleString()}`
 }
 
-function statusClass(status: Order['status']) {
-  const map: Record<Order['status'], string> = {
-    completed: 'bg-emerald-50 text-emerald-700',
-    shipping: 'bg-blue-50 text-blue-600',
-    pending: 'bg-amber-50 text-amber-700',
-    canceled: 'bg-red-50 text-red-600',
-  }
-  return map[status]
+function formatDate(value: string) {
+  return value.replace('T', ' ').slice(0, 16)
 }
 
-function statusDotClass(status: Order['status']) {
-  const map: Record<Order['status'], string> = {
-    completed: 'bg-emerald-600',
-    shipping: 'bg-blue-500 animate-pulse',
-    pending: 'bg-amber-500',
-    canceled: 'bg-red-500',
-  }
-  return map[status]
+function directionPrefix(record: TaskSettlementRecord) {
+  if (record.direction === 'income') return '+'
+  return '-'
 }
 
-function statusText(status: Order['status']) {
-  const map: Record<Order['status'], string> = {
-    completed: '已成交',
-    shipping: '配运中',
-    pending: '待付款',
-    canceled: '已取消',
-  }
-  return map[status]
+function directionClass(record: TaskSettlementRecord) {
+  if (record.direction === 'income') return 'text-emerald-700'
+  return 'text-[#fa8231]'
 }
 
-function handleUpdateStatus(orderId: string, nextStatus: Order['status']) {
-  if (!canManage.value) {
-    alert('🔒 权限受限：您没有 [order_manage] 订单更新权限，无法操作。')
+function openTask(record: TaskSettlementRecord) {
+  const fromOrders = { query: { from: 'orders' } }
+  if (isLawyer.value) {
+    router.push({ name: 'my-task-detail', params: { id: record.taskId }, ...fromOrders })
     return
   }
-  const updated = orders.value.map((o) => {
-    if (o.id === orderId) {
-      db.addLog(
-        props.currentUser.username,
-        roleLabel.value,
-        `更改订单状态: ${orderId} (${o.status} => ${nextStatus})`,
-        'OrderManage',
-        'success',
-      )
-      return { ...o, status: nextStatus }
-    }
-    return o
-  })
-  db.saveOrders(updated)
-  orders.value = updated
+  if (isPublisher.value || isAdmin.value) {
+    router.push({ name: 'order-task-detail', params: { id: record.taskId } })
+  }
 }
 
-function handleCancelOrder(orderId: string) {
-  if (!canManage.value) {
-    alert('🔒 权限受限：仅支持运营配属人员操作。')
-    return
-  }
-  handleUpdateStatus(orderId, 'canceled')
-}
-
-function openAddForm() {
-  if (!canManage.value) {
-    alert('🔒 权限控制：仅支持 admin 或 editor 下设账户自主新增商品订单。')
-    return
-  }
-  showAddForm.value = true
-}
-
-function resetForm() {
-  customer.value = ''
-  email.value = ''
-  productName.value = ''
-  category.value = '数码电子'
-  amount.value = ''
-  paymentMethod.value = 'Alipay'
-}
-
-function handleCreateOrder(e: Event) {
-  e.preventDefault()
-  if (!canManage.value) {
-    alert('🔒 权限受限：不合规编辑角色，无法通过当前表单提交订单。')
-    return
-  }
-  if (!customer.value.trim() || !productName.value.trim() || !amount.value.trim()) {
-    alert('⚠️ 请完整填写所有必填项目')
-    return
-  }
-  const price = parseFloat(amount.value)
-  if (isNaN(price) || price <= 0) {
-    alert('⚠️ 请输入合法的销售额数额')
-    return
-  }
-
-  const newOrder: Order = {
-    id: `ORD-${new Date().toISOString().slice(0, 10).replace(/[^0-9]/g, '')}${Math.floor(Math.random() * 90 + 10)}`,
-    customerName: customer.value.trim(),
-    email: email.value.trim() || `${customer.value.trim()}@example.com`,
-    productName: productName.value.trim(),
-    category: category.value,
-    amount: price,
-    status: 'pending',
-    date: new Date().toISOString().replace('T', ' ').substring(0, 19),
-    paymentMethod: paymentMethod.value,
-  }
-
-  const updated = [newOrder, ...orders.value]
-  db.saveOrders(updated)
-  orders.value = updated
-
-  db.addLog(
-    props.currentUser.username,
-    roleLabel.value,
-    `自主发起新订单申报: ${newOrder.id} - ¥${price.toLocaleString()}`,
-    'OrderManage',
-    'success',
-  )
-
-  const summary = db.getSummary()
-  localStorage.setItem(
-    'admin_summary',
-    JSON.stringify({
-      ...summary,
-      todaySales: summary.todaySales + price,
-      todayOrders: summary.todayOrders + 1,
-    }),
-  )
-
-  resetForm()
-  showAddForm.value = false
+function openTaskManagement() {
+  router.push('/tasks')
 }
 
 function handleExportData() {
-  const subset = filteredOrders.value.map((o) => ({
-    订单号: o.id,
-    姓名: o.customerName,
-    产品名称: o.productName,
-    品类: o.category,
-    成交金额: o.amount,
-    支付方式: o.paymentMethod,
-    履约状态: o.status,
-    时间: o.date,
+  if (!canManage.value) {
+    alert('🔒 权限受限：您没有 [order_manage] 导出权限。')
+    return
+  }
+
+  const subset = filteredRecords.value.map((r) => ({
+    任务编号: r.taskId,
+    任务标题: r.taskTitle,
+    类型: r.taskType,
+    地域: r.region,
+    收支方向: r.direction === 'income' ? '收入' : '支出',
+    发布方: r.publisherName,
+    律师: r.lawyerName ?? '—',
+    预算: r.budget,
+    成交金额: r.agreedAmount,
+    履约状态: SETTLEMENT_STATUS_LABELS[r.settlementStatus],
+    任务状态: r.taskStatus,
+    更新时间: r.updatedAt,
   }))
+
   exportedData.value = JSON.stringify(subset, null, 2)
   db.addLog(
     props.currentUser.username,
-    roleLabel.value,
-    `导出筛选下的订单归类数据 (${subset.length} 条数据条目)`,
+    currentRoleLabel.value,
+    `导出收支履约数据 (${subset.length} 条)`,
     'OrderManage',
     'success',
   )
@@ -250,11 +188,11 @@ function handleCopyToClipboard() {
     <!-- 控制面板 -->
     <div class="bg-white border border-slate-100 rounded-2xl p-4 shadow-xs flex flex-col md:flex-row items-center justify-between gap-4">
       <div class="flex items-center gap-2 w-full md:w-auto">
-        <ShoppingBag class="w-5 h-5 text-slate-800 shrink-0" />
+        <Wallet class="w-5 h-5 text-slate-800 shrink-0" />
         <div>
-          <h2 class="font-space font-bold text-sm text-slate-900">业务资金妥投与订单控制中心</h2>
+          <h2 class="font-space font-bold text-sm text-slate-900">{{ pageTitle }}</h2>
           <p class="text-[11px] text-slate-500">
-            搜索、分流、核减并推进交易流程。当前承载 {{ orders.length }} 条记录
+            {{ pageSubtitle }} · 共 {{ records.length }} 条履约记录
           </p>
         </div>
       </div>
@@ -265,7 +203,7 @@ function handleCopyToClipboard() {
           <input
             v-model="searchQuery"
             type="text"
-            placeholder="搜索订单号/顾客名/单品..."
+            placeholder="搜索任务/对方/编号..."
             class="w-full pl-9 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs focus:outline-hidden focus:border-slate-800 focus:bg-white transition-all font-medium"
           />
         </div>
@@ -274,179 +212,208 @@ function handleCopyToClipboard() {
           v-model="statusFilter"
           class="px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold focus:outline-hidden cursor-pointer"
         >
-          <option value="all">所有履约状态</option>
-          <option value="pending">⏳ 待支付付款</option>
-          <option value="shipping">🚚 已配发运输中</option>
-          <option value="completed">✅ 妥投交易成功</option>
-          <option value="canceled">❌ 驳回订单取消</option>
+          <option value="all">全部履约状态</option>
+          <option value="awaiting">待锁定</option>
+          <option value="fulfilling">履约中</option>
+          <option value="pending_settlement">待结算</option>
+          <option value="disputed">争议冻结</option>
+          <option value="settled">已结算</option>
+          <option value="closed">已关闭</option>
         </select>
 
         <select
-          v-model="categoryFilter"
+          v-model="typeFilter"
           class="px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold focus:outline-hidden cursor-pointer"
         >
-          <option value="all">全部分类类目</option>
-          <option value="数码电子">数码电子</option>
-          <option value="办公家具">办公家具</option>
-          <option value="数码配件">数码配件</option>
-          <option value="影音娱乐">影音娱乐</option>
+          <option value="all">全部任务类型</option>
+          <option v-for="t in TASK_TYPES" :key="t" :value="t">{{ t }}</option>
+        </select>
+
+        <select
+          v-if="isAdmin"
+          v-model="directionFilter"
+          class="px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold focus:outline-hidden cursor-pointer"
+        >
+          <option value="all">全部方向</option>
+          <option value="expense">支出（发布方）</option>
+          <option value="income">收入（律师）</option>
         </select>
 
         <button
-          class="p-1.5 bg-slate-50 border border-slate-200 hover:bg-slate-100 rounded-lg text-slate-600 hover:text-slate-900 transition flex items-center justify-center cursor-pointer"
-          title="生成本次筛选结算文本"
+          class="p-1.5 bg-slate-50 border border-slate-200 hover:bg-slate-100 rounded-lg text-slate-600 hover:text-slate-900 transition flex items-center justify-center cursor-pointer disabled:opacity-50"
+          title="导出筛选结果"
+          :disabled="!canManage"
           @click="handleExportData"
         >
           <FileSpreadsheet class="w-4 h-4" />
         </button>
-
-        <button
-          class="px-3.5 py-1.5 bg-[#fa8231] hover:bg-[#fa8231]/95 text-white text-xs font-semibold rounded-lg transition-all flex items-center gap-1 hover:shadow-xs active:scale-95 cursor-pointer"
-          @click="openAddForm"
-        >
-          <Plus class="w-3.5 h-3.5" />
-          新增申单
-        </button>
       </div>
     </div>
 
-    <!-- 履约状态概览 -->
-    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+    <!-- 收支概览 -->
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
       <div
         v-for="item in [
-          { label: '待支付', value: orderStats.pending, color: 'text-amber-700', bg: 'bg-amber-50 border-amber-100' },
-          { label: '配运中', value: orderStats.shipping, color: 'text-blue-700', bg: 'bg-blue-50 border-blue-100' },
-          { label: '已成交', value: orderStats.completed, color: 'text-emerald-700', bg: 'bg-emerald-50 border-emerald-100' },
-          { label: '已取消', value: orderStats.canceled, color: 'text-red-600', bg: 'bg-red-50 border-red-100' },
+          {
+            label: '待锁定',
+            count: stats.awaiting.count,
+            amount: stats.awaiting.amount,
+            color: 'text-amber-700',
+            bg: 'bg-amber-50 border-amber-100',
+            icon: TrendingDown,
+          },
+          {
+            label: '履约中',
+            count: stats.fulfilling.count,
+            amount: stats.fulfilling.amount,
+            color: 'text-blue-700',
+            bg: 'bg-blue-50 border-blue-100',
+            icon: TrendingDown,
+          },
+          {
+            label: '待结算',
+            count: stats.pendingSettlement.count,
+            amount: stats.pendingSettlement.amount,
+            color: 'text-violet-700',
+            bg: 'bg-violet-50 border-violet-100',
+            icon: TrendingDown,
+          },
+          {
+            label: '已结算',
+            count: stats.settled.count,
+            amount: stats.settled.amount,
+            color: 'text-emerald-700',
+            bg: 'bg-emerald-50 border-emerald-100',
+            icon: TrendingUp,
+          },
         ]"
         :key="item.label"
         class="rounded-xl border p-3"
         :class="item.bg"
       >
-        <span class="text-[10px] font-medium text-slate-500 block">{{ item.label }}</span>
-        <span class="font-space font-bold text-xl mt-0.5" :class="item.color">{{ item.value }}</span>
+        <div class="flex items-center justify-between">
+          <span class="text-[10px] font-medium text-slate-500">{{ item.label }}</span>
+          <component :is="item.icon" class="w-3.5 h-3.5 opacity-50" :class="item.color" />
+        </div>
+        <span class="font-space font-bold text-xl mt-0.5 block" :class="item.color">{{ item.count }}</span>
+        <span class="text-[10px] font-mono font-semibold mt-1 block" :class="item.color">
+          {{ directionLabel }} {{ formatAmount(item.amount) }}
+        </span>
       </div>
     </div>
 
-    <!-- 筛选结果摘要 -->
+    <!-- 筛选摘要 -->
     <div class="flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
       <span class="bg-slate-100 px-2.5 py-1 rounded-full font-medium">
-        当前筛选 {{ filteredOrders.length }} 笔
+        当前筛选 {{ filteredRecords.length }} 条
       </span>
-      <span class="bg-orange-50 text-[#fa8231] px-2.5 py-1 rounded-full font-mono font-semibold border border-orange-100">
-        合计 ¥{{ orderStats.filteredAmount.toLocaleString() }}
+      <span
+        class="px-2.5 py-1 rounded-full font-mono font-semibold border"
+        :class="isLawyer ? 'bg-emerald-50 text-emerald-700 border-emerald-100' : 'bg-orange-50 text-[#fa8231] border-orange-100'"
+      >
+        合计 {{ isLawyer ? '收入' : '支出' }} {{ formatAmount(stats.filteredAmount) }}
       </span>
+      <button
+        v-if="isPublisher && canManage"
+        type="button"
+        class="ml-auto text-[#fa8231] font-semibold hover:underline flex items-center gap-0.5 cursor-pointer"
+        @click="openTaskManagement"
+      >
+        前往任务发布管理
+        <ArrowRight class="w-3.5 h-3.5" />
+      </button>
     </div>
 
     <!-- 只读提示 -->
     <div v-if="!canManage" class="p-4 bg-slate-50 border border-slate-200 rounded-xl flex items-start gap-2">
       <Lock class="w-4.5 h-4.5 text-slate-400 shrink-0 mt-0.5" />
       <div>
-        <h4 class="text-xs font-semibold text-slate-700">只读控制模式激活中</h4>
+        <h4 class="text-xs font-semibold text-slate-700">只读浏览模式</h4>
         <p class="text-[11px] text-slate-500 mt-0.5 leading-relaxed">
-          您拥有的数据分析员或游客角色缺乏 <b>order_manage</b> 编辑许可。您可以随时使用上行搜索或表单导出大盘信息，但下方状态更改（发货、完成、一键撤销、新增）等控制节点将置为不可点击。
+          您缺少 <b>order_manage</b> 权限，可查看收支履约明细，但无法导出数据。任务验收与结算确认请在「任务发布管理」或任务详情中操作。
         </p>
       </div>
     </div>
 
-    <!-- 订单表格 -->
-    <div class="bg-white border border-slate-100 rounded-2xl p-5 shadow-xs overflow-x-auto">
+    <!-- 履约说明 -->
+    <div class="p-3 bg-slate-50 border border-slate-100 rounded-xl text-[11px] text-slate-600 leading-relaxed">
+      <span class="font-semibold text-slate-700">履约节点说明：</span>
+      待锁定（任务待承接）→ 履约中（律师执行中）→ 待结算（交付待确认）→ 已结算（任务完成）。
+      成交金额优先取中标报价，无报价时使用任务预算。
+    </div>
+
+    <!-- 数据表格 -->
+    <div v-if="loading" class="py-16 text-center text-slate-400 text-sm bg-white border border-slate-100 rounded-2xl">
+      加载履约数据中...
+    </div>
+
+    <div v-else class="bg-white border border-slate-100 rounded-2xl p-5 shadow-xs overflow-x-auto">
       <table class="w-full text-xs text-left border-collapse min-w-3xl">
         <thead>
           <tr class="border-b border-slate-150 text-slate-400 font-medium font-sans">
-            <th class="py-3 px-2 w-[18%]">结算单号</th>
-            <th class="py-3 px-2 w-[15%]">买主基本信息</th>
-            <th class="py-3 px-2">交易单件物件</th>
-            <th class="py-3 px-2 w-[12%]">类别</th>
-            <th class="py-3 px-2 w-[12%] text-right font-semibold">营业折合</th>
-            <th class="py-3 px-2 w-[10%] text-center">支付结算方式</th>
-            <th class="py-3 px-2 w-[10%] text-center">当前进度</th>
-            <th class="py-3 px-2 text-right w-[15%]">操作履约核心</th>
+            <th class="py-3 px-2 w-[20%]">任务信息</th>
+            <th class="py-3 px-2 w-[8%]">类型</th>
+            <th v-if="isAdmin || isPublisher" class="py-3 px-2 w-[10%]">律师</th>
+            <th v-if="isAdmin || isLawyer" class="py-3 px-2 w-[10%]">发布方</th>
+            <th class="py-3 px-2 w-[8%] text-right">预算</th>
+            <th class="py-3 px-2 w-[10%] text-right font-semibold">成交金额</th>
+            <th class="py-3 px-2 w-[10%] text-center">履约状态</th>
+            <th class="py-3 px-2 w-[10%]">更新时间</th>
+            <th class="py-3 px-2 text-right w-[10%]">操作</th>
           </tr>
         </thead>
         <tbody class="divide-y divide-slate-50 text-slate-700 font-medium">
-          <tr v-if="!filteredOrders.length">
-            <td colspan="8" class="py-12 text-center text-slate-400 font-medium">
-              根据设定的复合过滤，未能提取到符合规要求的订单。
+          <tr v-if="!filteredRecords.length">
+            <td :colspan="isAdmin ? 9 : 8" class="py-12 text-center text-slate-400 font-medium">
+              {{ isLawyer ? '暂无已承接任务的履约记录，前往任务大厅申请任务' : '暂无已发布任务的履约记录' }}
             </td>
           </tr>
           <tr
-            v-for="o in filteredOrders"
-            :key="o.id"
+            v-for="r in filteredRecords"
+            :key="r.id"
             class="hover:bg-slate-50/40 transition-colors"
-            :class="o.status === 'canceled' ? 'bg-red-50/10' : ''"
+            :class="r.settlementStatus === 'closed' ? 'bg-red-50/10' : ''"
           >
             <td class="py-3.5 px-2">
-              <span class="font-mono font-bold text-slate-900 block">{{ o.id }}</span>
-              <span class="font-mono text-[10px] text-slate-400 block mt-0.5">{{ o.date }}</span>
-            </td>
-            <td class="py-3.5 px-2">
-              <span class="font-bold text-slate-800 block">{{ o.customerName }}</span>
-              <span class="text-[10px] text-slate-400 block break-all font-mono">{{ o.email }}</span>
-            </td>
-            <td class="py-3.5 px-2">
-              <span class="truncate block font-medium max-w-xs" :title="o.productName">{{ o.productName }}</span>
+              <span class="font-bold text-slate-800 block truncate max-w-xs" :title="r.taskTitle">{{ r.taskTitle }}</span>
+              <span class="font-mono text-[10px] text-slate-400 block mt-0.5">{{ r.taskId.slice(0, 12) }}…</span>
             </td>
             <td class="py-3.5 px-2">
               <span class="text-[11px] bg-slate-50 border border-slate-100 text-slate-500 px-2 py-0.5 rounded-sm">
-                {{ o.category }}
+                {{ r.taskType }}
               </span>
             </td>
-            <td class="py-3.5 px-2 text-right">
-              <span class="font-mono text-xs font-bold text-slate-900">¥{{ o.amount.toLocaleString() }}</span>
+            <td v-if="isAdmin || isPublisher" class="py-3.5 px-2">
+              <span class="text-slate-700">{{ r.lawyerName ?? '—' }}</span>
             </td>
-            <td class="py-3.5 px-2 text-center">
-              <span class="px-2 py-0.5 rounded text-[10px] font-bold" :class="paymentClass(o.paymentMethod)">
-                {{ paymentLabel(o.paymentMethod) }}
+            <td v-if="isAdmin || isLawyer" class="py-3.5 px-2">
+              <span class="text-slate-700">{{ r.publisherName }}</span>
+            </td>
+            <td class="py-3.5 px-2 text-right font-mono text-slate-500">{{ formatAmount(r.budget) }}</td>
+            <td class="py-3.5 px-2 text-right">
+              <span class="font-mono text-xs font-bold" :class="directionClass(r)">
+                {{ directionPrefix(r) }}{{ formatAmount(r.agreedAmount) }}
               </span>
             </td>
             <td class="py-3.5 px-2 text-center">
               <span
                 class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold"
-                :class="statusClass(o.status)"
+                :class="SETTLEMENT_STATUS_CLASS[r.settlementStatus]"
               >
-                <span class="w-1.5 h-1.5 rounded-full" :class="statusDotClass(o.status)" />
-                {{ statusText(o.status) }}
+                <span class="w-1.5 h-1.5 rounded-full" :class="SETTLEMENT_STATUS_DOT_CLASS[r.settlementStatus]" />
+                {{ SETTLEMENT_STATUS_LABELS[r.settlementStatus] }}
               </span>
             </td>
+            <td class="py-3.5 px-2 font-mono text-[10px] text-slate-400">{{ formatDate(r.updatedAt) }}</td>
             <td class="py-3.5 px-2 text-right">
-              <div class="flex gap-1.5 justify-end">
-                <button
-                  v-if="o.status === 'pending'"
-                  :disabled="!canManage"
-                  class="px-2 py-1 bg-blue-50 text-blue-700 hover:bg-blue-100 rounded text-[10px] font-semibold flex items-center gap-0.5 disabled:opacity-50 cursor-pointer"
-                  title="配置揽收并发货"
-                  @click="handleUpdateStatus(o.id, 'shipping')"
-                >
-                  <Truck class="w-3 h-3" />
-                  发货
-                </button>
-                <button
-                  v-if="o.status === 'shipping'"
-                  :disabled="!canManage"
-                  class="px-2 py-1 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 rounded text-[10px] font-semibold flex items-center gap-0.5 disabled:opacity-50 cursor-pointer"
-                  title="确认客户安全妥投"
-                  @click="handleUpdateStatus(o.id, 'completed')"
-                >
-                  <CheckCircle2 class="w-3 h-3" />
-                  妥投
-                </button>
-                <button
-                  v-if="o.status !== 'canceled' && o.status !== 'completed'"
-                  :disabled="!canManage"
-                  class="p-1 hover:bg-red-50 text-red-600 rounded disabled:opacity-50 cursor-pointer"
-                  title="撤销废弃此交易"
-                  @click="handleCancelOrder(o.id)"
-                >
-                  <XCircle class="w-4.5 h-4.5" />
-                </button>
-                <span
-                  v-if="o.status === 'completed' || o.status === 'canceled'"
-                  class="text-[10px] text-slate-400 font-sans italic"
-                >
-                  结单入库
-                </span>
-              </div>
+              <button
+                type="button"
+                class="px-2 py-1 bg-slate-50 text-slate-700 hover:bg-slate-100 rounded text-[10px] font-semibold inline-flex items-center gap-0.5 cursor-pointer"
+                @click="openTask(r)"
+              >
+                <ExternalLink class="w-3 h-3" />
+                查看任务
+              </button>
             </td>
           </tr>
         </tbody>
@@ -462,7 +429,7 @@ function handleCopyToClipboard() {
         <div class="flex items-center justify-between border-b border-slate-700 pb-3 mb-4">
           <span class="text-xs font-semibold text-slate-300 flex items-center gap-2">
             <FileSpreadsheet class="w-4 h-4 text-[#fa8231]" />
-            数据流出预览盘 (JSON Segment)
+            收支履约导出预览 (JSON)
           </span>
           <div class="flex items-center gap-2">
             <button
@@ -472,7 +439,7 @@ function handleCopyToClipboard() {
               <component :is="copied ? Check : Copy" class="w-3.5 h-3.5" :class="copied ? 'text-emerald-400' : ''" />
               {{ copied ? '已复制' : '复制数据' }}
             </button>
-            <button class="p-1 hover:bg-slate-800 text-slate-400 hover:text-white rounded" @click="exportedData = null">
+            <button class="p-1 hover:bg-slate-800 text-slate-400 hover:text-white rounded cursor-pointer" @click="exportedData = null">
               <XCircle class="w-4 h-4" />
             </button>
           </div>
@@ -480,111 +447,5 @@ function handleCopyToClipboard() {
         <pre class="text-[10px] overflow-auto max-h-48 leading-relaxed max-w-full">{{ exportedData }}</pre>
       </div>
     </Transition>
-
-    <!-- 新增订单弹窗 -->
-    <Teleport to="body">
-      <Transition name="modal">
-        <div
-          v-if="showAddForm"
-          class="fixed inset-0 bg-slate-950/30 backdrop-blur-xs flex items-center justify-center p-4 z-50"
-        >
-          <div class="bg-white rounded-2xl p-6 shadow-2xl max-w-md w-full border border-slate-100">
-            <div class="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
-              <h3 class="font-space font-bold text-sm text-slate-900 flex items-center gap-1.5">
-                <Plus class="w-5 h-5 text-slate-800" />
-                新增销售业绩申报单
-              </h3>
-              <button class="p-1 hover:bg-slate-100 rounded text-slate-400" @click="showAddForm = false">
-                <XCircle class="w-4.5 h-4.5" />
-              </button>
-            </div>
-
-            <form class="space-y-4 text-left" @submit="handleCreateOrder">
-              <div>
-                <label class="block text-[11px] font-semibold text-slate-600 mb-1">买方客户姓名 *</label>
-                <input
-                  v-model="customer"
-                  type="text"
-                  placeholder="请输入姓名，如 陈明"
-                  required
-                  class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold focus:outline-hidden focus:border-slate-800 focus:bg-white transition"
-                />
-              </div>
-              <div>
-                <label class="block text-[11px] font-semibold text-slate-600 mb-1">电子邮箱 (选填)</label>
-                <input
-                  v-model="email"
-                  type="email"
-                  placeholder="your@customer.com"
-                  class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold focus:outline-hidden focus:border-slate-800 focus:bg-white transition"
-                />
-              </div>
-              <div>
-                <label class="block text-[11px] font-semibold text-slate-600 mb-1">成交单品名称 *</label>
-                <input
-                  v-model="productName"
-                  type="text"
-                  placeholder="请输入购买商品全名，如 Cherry 轴定制版键盘"
-                  required
-                  class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold focus:outline-hidden focus:border-slate-800 focus:bg-white transition"
-                />
-              </div>
-              <div class="grid grid-cols-2 gap-3">
-                <div>
-                  <label class="block text-[11px] font-semibold text-slate-600 mb-1">品类分配</label>
-                  <select
-                    v-model="category"
-                    class="w-full px-2 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold focus:outline-hidden"
-                  >
-                    <option value="数码电子">数码电子</option>
-                    <option value="办公家具">办公家具</option>
-                    <option value="数码配件">数码配件</option>
-                    <option value="影音娱乐">影音娱乐</option>
-                  </select>
-                </div>
-                <div>
-                  <label class="block text-[11px] font-semibold text-slate-600 mb-1">实付金额 (元) *</label>
-                  <input
-                    v-model="amount"
-                    type="number"
-                    step="0.01"
-                    placeholder="199.00"
-                    required
-                    class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold focus:outline-hidden focus:border-slate-800 focus:bg-white transition"
-                  />
-                </div>
-              </div>
-              <div>
-                <label class="block text-[11px] font-semibold text-slate-600 mb-1">预定支付方式</label>
-                <select
-                  v-model="paymentMethod"
-                  class="w-full px-2 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold focus:outline-hidden"
-                >
-                  <option value="Alipay">支付宝 (Alipay)</option>
-                  <option value="WeChatPay">微信支付 (WeChatPay)</option>
-                  <option value="CreditCard">信用卡双币结算 (CreditCard)</option>
-                  <option value="PayPal">贝宝跨境结汇 (PayPal)</option>
-                </select>
-              </div>
-              <div class="flex gap-2 justify-end pt-4 border-t border-slate-100">
-                <button
-                  type="button"
-                  class="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-semibold rounded-lg transition"
-                  @click="showAddForm = false"
-                >
-                  取消
-                </button>
-                <button
-                  type="submit"
-                  class="px-3.5 py-1.5 bg-[#fa8231] hover:bg-[#fa8231]/95 text-white text-xs font-semibold rounded-lg transition shadow-md active:scale-95 cursor-pointer"
-                >
-                  确认申报入库
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      </Transition>
-    </Teleport>
   </div>
 </template>

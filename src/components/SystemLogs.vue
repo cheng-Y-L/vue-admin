@@ -3,9 +3,13 @@ import { ref, computed, onMounted } from 'vue'
 import { Terminal, Search, Trash2, Download, AlertOctagon, CheckCircle, User } from '@lucide/vue'
 import { db } from '../services/data'
 import { formatLocalDateTime } from '@/utils/datetime'
+import { roleLabel } from '@/constants/roles'
+import { filterLogsForUser } from '@/utils/system-logs'
 import type { SystemLog, User as SystemUser } from '../types'
 
 const props = defineProps<{ currentUser: SystemUser }>()
+
+const isAdmin = computed(() => props.currentUser.role === 'admin')
 
 const logs = ref<SystemLog[]>([])
 const searchQuery = ref('')
@@ -14,8 +18,12 @@ const statusFilter = ref<'all' | SystemLog['status']>('all')
 const intrusionAlert = ref(false)
 
 onMounted(() => {
-  logs.value = db.getLogs()
+  reloadLogs()
 })
+
+function reloadLogs() {
+  logs.value = filterLogsForUser(db.getLogs(), props.currentUser)
+}
 
 const filteredLogs = computed(() => {
   const q = searchQuery.value.trim().toLowerCase()
@@ -69,10 +77,14 @@ function handleClearLogs() {
   }
 
   db.saveLogs([systemClearedLog])
-  logs.value = [systemClearedLog]
+  reloadLogs()
 }
 
 function handleTriggerMockIntrusion() {
+  if (!isAdmin.value) {
+    alert('🔒 仅超级管理员可模拟全局安全威胁事件')
+    return
+  }
   const intruderIPs = ['103.88.23.90', '198.45.101.44', '45.122.90.15']
   const randomIP = intruderIPs[Math.floor(Math.random() * intruderIPs.length)]
 
@@ -85,7 +97,7 @@ function handleTriggerMockIntrusion() {
     randomIP,
   )
 
-  logs.value = db.getLogs()
+  reloadLogs()
   intrusionAlert.value = true
   setTimeout(() => (intrusionAlert.value = false), 4000)
 }
@@ -102,12 +114,12 @@ function handleDownloadLogs() {
 
   db.addLog(
     props.currentUser.username,
-    props.currentUser.role === 'admin' ? '管理员' : '运营编辑',
+    roleLabel(props.currentUser.role),
     '成功将当前的本地筛选审计日志数据打包并导出为本地 JSON 离线归档',
     'SystemSettings',
     'success',
   )
-  logs.value = db.getLogs()
+  reloadLogs()
 }
 </script>
 
@@ -120,7 +132,11 @@ function handleDownloadLogs() {
         <div>
           <h2 class="font-space font-bold text-sm text-slate-900">系统审计与核减溯源日志</h2>
           <p class="text-[11px] text-slate-500">
-            追踪该组织机构下的所有写及安全登录链路事务。共 {{ logs.length }} 条流水
+            {{
+              isAdmin
+                ? `追踪全平台操作与安全登录链路，共 ${logs.length} 条流水`
+                : `仅展示您的操作审计记录，共 ${logs.length} 条`
+            }}
           </p>
         </div>
       </div>
@@ -158,6 +174,7 @@ function handleDownloadLogs() {
         </select>
 
         <button
+          v-if="isAdmin"
           class="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-700 text-xs font-semibold rounded-lg transition-colors border border-red-100 cursor-pointer"
           title="模拟机器人网络安全威胁进行入库记录展示"
           @click="handleTriggerMockIntrusion"
@@ -188,7 +205,7 @@ function handleDownloadLogs() {
     <!-- 审计统计 -->
     <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
       <div class="bg-white border border-slate-100 rounded-xl p-3 shadow-xs">
-        <span class="text-[10px] text-slate-500 block">全量流水</span>
+        <span class="text-[10px] text-slate-500 block">{{ isAdmin ? '全量流水' : '我的流水' }}</span>
         <span class="font-space font-bold text-xl text-slate-900">{{ logStats.total }}</span>
       </div>
       <div class="bg-emerald-50 border border-emerald-100 rounded-xl p-3">
